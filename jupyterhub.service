@@ -1,0 +1,18 @@
+[Unit]
+Description=JupyterHub multi-user server
+After=network.target
+
+[Service]
+User=root
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_AUDIT_WRITE CAP_SETGID CAP_SETUID
+ExecStart=/opt/miniforge3/bin/conda run -p /opt/jupyterhub/venv \
+          jupyterhub --no-ssl --config /etc/jupyterhub/jupyterhub_config.py
+Restart=on-failure
+User=root
+# hub must be able to run systemd-run --uid=<user>
+Restart=on-failure
+# ulimit -n config, uncomment it if met upper cap
+# LimitNOFILE=512000
+
+[Install]
+WantedBy=multi-user.target
