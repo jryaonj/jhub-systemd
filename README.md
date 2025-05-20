@@ -82,6 +82,8 @@ this is sample configure, make you own one, though
 #/etc/jupyterhub/jupyterhub_config.py
 c = get_config()  #noqa
 c.JupyterHub.authenticator_class = 'jupyterhub.auth.PAMAuthenticator'
+c.JupyterHub.hub_ip = '127.0.0.1'
+c.JupyterHub.hub_port = 8081
 c.JupyterHub.spawner_class = 'systemdspawner.SystemdSpawner'
 c.PAMAuthenticator.allow_all = True
 c.PAMAuthenticator.service = 'jupyterhub'
@@ -189,4 +191,145 @@ if we process inside `JupyterHub`-`JupyterLab` interface, the default `conda`/`m
 
 ```bash
 eval "$('/opt/miniforge3/bin/mamba' shell hook --shell bash --root-prefix '/opt/miniforge3')"
+```
+### self-hosted stuff
+
+for support local-hosting, we need these files
+
+* Authroized or self-assigned SSL certificate for HTTPS protocol
+* a local reverse-proxy setup for access intra/extra net, e.x. `NGINX`
+
+#### SSL related stuff
+
+first a brief minimal concept on `modern-internet` basis of 'certificate-chain',
+the concised relation ship of these ideas are like
+
+| | authority | certificate | domain | ip address |
+|---|---------|-------------|--------|------------|
+|authority| verify is such claimed authority **vaild** | two type of cert, one act like a key/seal, other like a lock/signed-documents. authority use the key/seal-like cert to sign certificate, while the **seal**-like one called **root certificate**^1 | - | - |
+| certificate | - | user purchase, or gain a certificate^4 or make self-signed one another certificate, thus make a **signatrue-chain**^1 | contain domain info on demand | can also contain IP info, mainly in self-signed one|
+| domain | - | - | user purchase domain from **domain register**^2, hosted from provider | domain-hosted provider DNS resolve service^3, can also make a local DNS server to do resolve |
+| ip | - | - | reverse resolve, if given such service | - |
+
+1. there are two type of cert, one is full cert, which can both sign/generate another auth-cert and  sign/generate the client-cert, the limited-function client-cert, could only used to verify itself, without the inherit property. this practice of asymmetric encryption thus makes a **chain-of-trust**, for which means the trusted-root-certificate is very important (also vulnerable to, if wrongly trusted then attacking).
+2. which we mainly called as **buy a domain**, actually make a **register** on **trusted authority**
+3. thus each domain register must give a NS (name service) address setting on each solded `doamin` as the basic service
+4. generally called **buy a SSL certificate** (from trusted authority and a long but not everlast valid time), and there're much service on free SSL certificate (like **Let's Encrypt** )within the proof of ownership of typical domain, but within a limited valid time compared with commercial vender products; some auto-script like [acme.sh](https://github.com/acmesh-official/acme.sh) may cope such a shortcome
+
+* you may also figure out the basis of modern internet is based on everywhere **authority**, which is actually by its design and means a lot. but this is another topic.
+
+
+here we just make a self-signed one. typically every modern LINUX distribution has its own verson of openssl, thus directly running following command at the `workdir`
+
+* support you within root privilege now at `/etc` folder
+
+```bash
+# create folder
+mkdir -p cert; cd cert
+# create domain_san.conf file to set the generating information
+# auth/req/domain_cert
+cat << EOF > domain_san.conf
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+req_extensions = req_ext
+distinguished_name = dn
+
+[dn]
+C = US
+ST = New York
+L = Manhattan
+O = DemoCommunity
+OU = DemoCommunity Infrastracture
+CN = infra.democommunity.domain
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = jhub.democommunity.domain
+DNS.2 = 10.0.11.22
+EOF
+# create sign-cert, sign-request, and domain-cert
+# ca key
+openssl genrsa -out domain.key 2048
+# cert sign request to CA, # common name
+openssl req -new -key domain.key -out domain.csr -config domain_san.conf
+# self-sign, 3650 days, as self-sign nearly always forget to renew -_,-
+openssl x509 -req \
+    -days 3650 \
+    -in domain.csr \
+    -signkey domain.key \
+    -out domain.crt \
+    -extensions req_ext \
+    -extfile domain_san.conf
+# verify
+# openssl x509 -text -noout -in domain.crt
+```
+
+after that, you would find `domain.crt` and `domain.key`, which would be used in the below `NGINX` configuration
+
+#### reverse proxy stuff
+
+here we directly use `nginx`, directly install via 
+
+```bash
+apt-get install nginx
+```
+
+then make a site configure file `jhub` and put it under the directory path `/etc/nginx/sites-available`
+
+* here we make a `server_name ... _;` in cfg , which means the `NGINX` would not first check whether the domain-name is same, and accepte all the access, from the client HTTP request.
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name jhub.democommunity.domain _;
+
+    ssl_certificate /etc/nginx/cert/domain.crt; # Path to your certificate
+    ssl_certificate_key /etc/nginx/cert/domain.key; # Path to your private key
+
+    client_max_body_size 10240m;
+
+    location / {
+        proxy_pass http://localhost:8000; # JupyterHub's default port
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+after make cfg, copy the generated certificate file from the `/etc/cert/` folder to the configured path in nginx, which is `/etc/nginx/cert/domain.crt` and `/etc/nginx/cert/domain.key`
+
+* remember to check if the user:nginx have the read permission on both file, if not, please add such permission. you can achieve it by directly running `chown`, or make a `acl` wise if `filesystem` support it
+
+```bash
+# copy from /etc/ to /etc/nginx
+rsync -aviPAXHx /etc/domain.{crt,key} /etc/nginx/cert/
+# change ownership
+# chown -R nginx /etc/nginx/cert
+# or acl cmd
+setfacl -m u:nginx:r /etc/nginx/cert/domain.crt
+setfacl -m u:nginx:r /etc/nginx/cert/domain.key
+```
+
+after that, make a `symlink` to jhub config in `/etc/nginx/sites-enable`, and then restart / reload nginx to make config effect
+
+```bash
+# make sure the order is [actual-file] [symbolic-linker]
+ln -s /etc/nginx/sites-available/jhub /etc/nginx/sites-enable/jhub
+# if nginx not running, 
+# systemctl restart nginx
+# check if all config is ok
+nginx -t
+# reload on-site
+nginx -s reload
 ```

@@ -459,7 +459,7 @@ c.JupyterHub.authenticator_class = 'jupyterhub.auth.PAMAuthenticator'
 #          See `hub_connect_ip` for cases where the bind and connect address should differ,
 #          or `hub_bind_url` for setting the full bind URL.
 #  Default: '127.0.0.1'
-# c.JupyterHub.hub_ip = '127.0.0.1'
+c.JupyterHub.hub_ip = '127.0.0.1'
 
 ## The internal port for the Hub process.
 #
@@ -470,7 +470,7 @@ c.JupyterHub.authenticator_class = 'jupyterhub.auth.PAMAuthenticator'
 #          See also `hub_ip` for the ip and `hub_bind_url` for setting the full
 #  bind URL.
 #  Default: 8081
-# c.JupyterHub.hub_port = 8081
+c.JupyterHub.hub_port = 8081
 
 ## The routing prefix for the Hub itself.
 #
